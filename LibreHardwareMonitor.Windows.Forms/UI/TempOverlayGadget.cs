@@ -26,12 +26,14 @@ public class TempOverlayGadget : Gadget
 
     private static readonly Color CpuColor = Color.FromArgb(255, 240, 150, 70);   // orange
     private static readonly Color GpuColor = Color.FromArgb(255, 95, 205, 115);   // green
+    private static readonly Color RamColor = Color.FromArgb(255, 90, 170, 235);   // blue
     private static readonly Color BackgroundColor = Color.FromArgb(180, 22, 22, 22);
     private static readonly Color LabelColor = Color.FromArgb(210, 210, 210, 210);
 
     private readonly IComputer _computer;
     private readonly Queue<Sample> _cpuHistory = new();
     private readonly Queue<Sample> _gpuHistory = new();
+    private readonly Queue<Sample> _ramHistory = new();
 
     private readonly Font _valueFont;
     private readonly Font _labelFont;
@@ -45,7 +47,7 @@ public class TempOverlayGadget : Gadget
         _valueFont = new Font(SystemFonts.MessageBoxFont.FontFamily, 13f, FontStyle.Bold);
         _labelFont = new Font(SystemFonts.MessageBoxFont.FontFamily, 7.5f, FontStyle.Bold);
 
-        Size = new Size(190, 86);
+        Size = new Size(190, 122);
 
         // default position: top-right corner of the primary screen
         Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
@@ -139,6 +141,31 @@ public class TempOverlayGadget : Gadget
         return allTemps.Count > 0 ? allTemps.Average() : null;
     }
 
+    private float? GetRamUsage(out float? usedGb)
+    {
+        float? load = null;
+        usedGb = null;
+
+        foreach (IHardware hardware in _computer.Hardware)
+        {
+            if (hardware.HardwareType != HardwareType.Memory)
+                continue;
+
+            foreach (ISensor sensor in hardware.Sensors)
+            {
+                if (!sensor.Value.HasValue)
+                    continue;
+
+                if (load == null && sensor.SensorType == SensorType.Load && sensor.Name == "Memory")
+                    load = sensor.Value.Value;
+                else if (usedGb == null && sensor.SensorType == SensorType.Data && sensor.Name == "Memory Used")
+                    usedGb = sensor.Value.Value;
+            }
+        }
+
+        return load;
+    }
+
     private static void UpdateHistory(Queue<Sample> history, float? value, DateTime now)
     {
         if (value.HasValue)
@@ -158,8 +185,10 @@ public class TempOverlayGadget : Gadget
         DateTime now = DateTime.Now;
         float? cpu = GetCpuTemperature();
         float? gpu = GetGpuTemperature();
+        float? ram = GetRamUsage(out float? ramUsedGb);
         UpdateHistory(_cpuHistory, cpu, now);
         UpdateHistory(_gpuHistory, gpu, now);
+        UpdateHistory(_ramHistory, ram, now);
 
         int w = Size.Width;
         int h = Size.Height;
@@ -168,21 +197,31 @@ public class TempOverlayGadget : Gadget
         using (GraphicsPath path = CreateRoundedRectangle(new Rectangle(0, 0, w - 1, h - 1), 10))
             g.FillPath(background, path);
 
-        int rowHeight = h / 2;
-        DrawRow(g, new Rectangle(0, 0, w, rowHeight), "CPU", cpu, _cpuHistory, CpuColor, now);
-        DrawRow(g, new Rectangle(0, rowHeight, w, h - rowHeight), "GPU", gpu, _gpuHistory, GpuColor, now);
+        int rowHeight = h / 3;
+        string ramText = ram.HasValue ? $"{ram.Value:F0}%" : "--";
+        string ramSuffix = ram.HasValue && ramUsedGb.HasValue ? $"{ramUsedGb.Value:F1} GB" : null;
+        DrawRow(g, new Rectangle(0, 0, w, rowHeight), "CPU", cpu.HasValue ? $"{cpu.Value:F0} °C" : "--", null, _cpuHistory, CpuColor, now);
+        DrawRow(g, new Rectangle(0, rowHeight, w, rowHeight), "GPU", gpu.HasValue ? $"{gpu.Value:F0} °C" : "--", null, _gpuHistory, GpuColor, now);
+        DrawRow(g, new Rectangle(0, 2 * rowHeight, w, h - 2 * rowHeight), "RAM", ramText, ramSuffix, _ramHistory, RamColor, now);
     }
 
-    private void DrawRow(Graphics g, Rectangle area, string label, float? value, Queue<Sample> history, Color color, DateTime now)
+    private void DrawRow(Graphics g, Rectangle area, string label, string text, string suffix, Queue<Sample> history, Color color, DateTime now)
     {
         const int pad = 8;
 
         using (SolidBrush labelBrush = new(LabelColor))
             g.DrawString(label, _labelFont, labelBrush, area.Left + pad, area.Top + pad - 3);
 
-        string text = value.HasValue ? $"{value.Value:F0} °C" : "--";
         using (SolidBrush valueBrush = new(color))
+        {
             g.DrawString(text, _valueFont, valueBrush, area.Left + pad - 2, area.Top + pad + 9);
+
+            if (suffix != null)
+            {
+                float valueWidth = g.MeasureString(text, _valueFont).Width;
+                g.DrawString(suffix, _labelFont, valueBrush, area.Left + pad - 2 + valueWidth, area.Top + pad + 16);
+            }
+        }
 
         Rectangle graph = new(area.Left + 84, area.Top + pad, area.Width - 84 - pad, area.Height - 2 * pad);
         DrawSparkline(g, graph, history, color, now);
