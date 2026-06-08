@@ -26,6 +26,7 @@ public class TempOverlayGadget : Gadget
 
     private static readonly Color CpuColor = Color.FromArgb(255, 240, 150, 70);   // orange
     private static readonly Color GpuColor = Color.FromArgb(255, 95, 205, 115);   // green
+    private static readonly Color NetColor = Color.FromArgb(255, 90, 170, 240);   // blue
     private static readonly Color BackgroundColor = Color.FromArgb(180, 22, 22, 22);
     private static readonly Color LabelColor = Color.FromArgb(210, 210, 210, 210);
 
@@ -45,7 +46,7 @@ public class TempOverlayGadget : Gadget
         _valueFont = new Font(SystemFonts.MessageBoxFont.FontFamily, 13f, FontStyle.Bold);
         _labelFont = new Font(SystemFonts.MessageBoxFont.FontFamily, 7.5f, FontStyle.Bold);
 
-        Size = new Size(190, 86);
+        Size = new Size(210, 129);
 
         // default position: top-right corner of the primary screen
         Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
@@ -139,6 +140,56 @@ public class TempOverlayGadget : Gadget
         return allTemps.Count > 0 ? allTemps.Average() : null;
     }
 
+    private (float? Download, float? Upload) GetNetworkThroughput()
+    {
+        float download = 0f;
+        float upload = 0f;
+        bool hasDownload = false;
+        bool hasUpload = false;
+
+        foreach (IHardware hardware in _computer.Hardware)
+        {
+            if (hardware.HardwareType != HardwareType.Network)
+                continue;
+
+            foreach (ISensor sensor in hardware.Sensors)
+            {
+                if (sensor.SensorType != SensorType.Throughput || !sensor.Value.HasValue)
+                    continue;
+
+                if (sensor.Name == "Download Speed")
+                {
+                    download += sensor.Value.Value;
+                    hasDownload = true;
+                }
+                else if (sensor.Name == "Upload Speed")
+                {
+                    upload += sensor.Value.Value;
+                    hasUpload = true;
+                }
+            }
+        }
+
+        return (hasDownload ? download : null, hasUpload ? upload : null);
+    }
+
+    private static string FormatBytesPerSecond(float? bytesPerSecond)
+    {
+        if (!bytesPerSecond.HasValue)
+            return "--";
+
+        string[] units = { "B/s", "KB/s", "MB/s", "GB/s" };
+        float value = bytesPerSecond.Value;
+        int unit = 0;
+        while (value >= 1024f && unit < units.Length - 1)
+        {
+            value /= 1024f;
+            unit++;
+        }
+
+        return $"{value:0.0} {units[unit]}";
+    }
+
     private static void UpdateHistory(Queue<Sample> history, float? value, DateTime now)
     {
         if (value.HasValue)
@@ -158,6 +209,7 @@ public class TempOverlayGadget : Gadget
         DateTime now = DateTime.Now;
         float? cpu = GetCpuTemperature();
         float? gpu = GetGpuTemperature();
+        (float? download, float? upload) = GetNetworkThroughput();
         UpdateHistory(_cpuHistory, cpu, now);
         UpdateHistory(_gpuHistory, gpu, now);
 
@@ -168,9 +220,10 @@ public class TempOverlayGadget : Gadget
         using (GraphicsPath path = CreateRoundedRectangle(new Rectangle(0, 0, w - 1, h - 1), 10))
             g.FillPath(background, path);
 
-        int rowHeight = h / 2;
+        int rowHeight = h / 3;
         DrawRow(g, new Rectangle(0, 0, w, rowHeight), "CPU", cpu, _cpuHistory, CpuColor, now);
-        DrawRow(g, new Rectangle(0, rowHeight, w, h - rowHeight), "GPU", gpu, _gpuHistory, GpuColor, now);
+        DrawRow(g, new Rectangle(0, rowHeight, w, rowHeight), "GPU", gpu, _gpuHistory, GpuColor, now);
+        DrawNetworkRow(g, new Rectangle(0, 2 * rowHeight, w, h - 2 * rowHeight), download, upload);
     }
 
     private void DrawRow(Graphics g, Rectangle area, string label, float? value, Queue<Sample> history, Color color, DateTime now)
@@ -186,6 +239,20 @@ public class TempOverlayGadget : Gadget
 
         Rectangle graph = new(area.Left + 84, area.Top + pad, area.Width - 84 - pad, area.Height - 2 * pad);
         DrawSparkline(g, graph, history, color, now);
+    }
+
+    private void DrawNetworkRow(Graphics g, Rectangle area, float? download, float? upload)
+    {
+        const int pad = 8;
+
+        using (SolidBrush labelBrush = new(LabelColor))
+            g.DrawString("NET", _labelFont, labelBrush, area.Left + pad, area.Top + pad - 3);
+
+        string text = download.HasValue || upload.HasValue
+            ? $"↓{FormatBytesPerSecond(download)}  ↑{FormatBytesPerSecond(upload)}"
+            : "--";
+        using (SolidBrush valueBrush = new(NetColor))
+            g.DrawString(text, _labelFont, valueBrush, area.Left + pad - 2, area.Top + pad + 11);
     }
 
     private static void DrawSparkline(Graphics g, Rectangle r, Queue<Sample> history, Color color, DateTime now)
