@@ -47,7 +47,7 @@ public class TempOverlayGadget : Gadget
         _valueFont = new Font(SystemFonts.MessageBoxFont.FontFamily, 13f, FontStyle.Bold);
         _labelFont = new Font(SystemFonts.MessageBoxFont.FontFamily, 7.5f, FontStyle.Bold);
 
-        Size = new Size(190, 122);
+        Size = new Size(230, 122);
 
         // default position: top-right corner of the primary screen
         Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
@@ -108,6 +108,33 @@ public class TempOverlayGadget : Gadget
         if (package.HasValue)
             return package;
         return allTemps.Count > 0 ? allTemps.Average() : null;
+    }
+
+    private float? GetCpuLoad()
+    {
+        List<float> coreLoads = new();
+        float? total = null;
+
+        foreach (IHardware hardware in _computer.Hardware)
+        {
+            if (hardware.HardwareType != HardwareType.Cpu)
+                continue;
+
+            foreach (ISensor sensor in hardware.Sensors)
+            {
+                if (sensor.SensorType != SensorType.Load || !sensor.Value.HasValue)
+                    continue;
+
+                if (total == null && sensor.Name == "CPU Total")
+                    total = sensor.Value.Value;
+                else if (sensor.Name.StartsWith("CPU Core #"))
+                    coreLoads.Add(sensor.Value.Value);
+            }
+        }
+
+        if (total.HasValue)
+            return total;
+        return coreLoads.Count > 0 ? coreLoads.Average() : null;
     }
 
     private float? GetGpuTemperature()
@@ -184,6 +211,7 @@ public class TempOverlayGadget : Gadget
 
         DateTime now = DateTime.Now;
         float? cpu = GetCpuTemperature();
+        float? cpuLoad = GetCpuLoad();
         float? gpu = GetGpuTemperature();
         float? ram = GetRamUsage(out float? ramUsedGb);
         UpdateHistory(_cpuHistory, cpu, now);
@@ -198,9 +226,12 @@ public class TempOverlayGadget : Gadget
             g.FillPath(background, path);
 
         int rowHeight = h / 3;
+        string cpuText = cpu.HasValue ? $"{cpu.Value:F0} °C" : "--";
+        if (cpuLoad.HasValue)
+            cpuText += $" · {cpuLoad.Value:F0}%";
         string ramText = ram.HasValue ? $"{ram.Value:F0}%" : "--";
         string ramSuffix = ram.HasValue && ramUsedGb.HasValue ? $"{ramUsedGb.Value:F1} GB" : null;
-        DrawRow(g, new Rectangle(0, 0, w, rowHeight), "CPU", cpu.HasValue ? $"{cpu.Value:F0} °C" : "--", null, _cpuHistory, CpuColor, now);
+        DrawRow(g, new Rectangle(0, 0, w, rowHeight), "CPU", cpuText, null, _cpuHistory, CpuColor, now);
         DrawRow(g, new Rectangle(0, rowHeight, w, rowHeight), "GPU", gpu.HasValue ? $"{gpu.Value:F0} °C" : "--", null, _gpuHistory, GpuColor, now);
         DrawRow(g, new Rectangle(0, 2 * rowHeight, w, h - 2 * rowHeight), "RAM", ramText, ramSuffix, _ramHistory, RamColor, now);
     }
@@ -208,6 +239,7 @@ public class TempOverlayGadget : Gadget
     private void DrawRow(Graphics g, Rectangle area, string label, string text, string suffix, Queue<Sample> history, Color color, DateTime now)
     {
         const int pad = 8;
+        const int graphLeft = 124;
 
         using (SolidBrush labelBrush = new(LabelColor))
             g.DrawString(label, _labelFont, labelBrush, area.Left + pad, area.Top + pad - 3);
@@ -223,7 +255,7 @@ public class TempOverlayGadget : Gadget
             }
         }
 
-        Rectangle graph = new(area.Left + 84, area.Top + pad, area.Width - 84 - pad, area.Height - 2 * pad);
+        Rectangle graph = new(area.Left + graphLeft, area.Top + pad, area.Width - graphLeft - pad, area.Height - 2 * pad);
         DrawSparkline(g, graph, history, color, now);
     }
 
